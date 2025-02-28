@@ -1,30 +1,12 @@
-setwd("/hpcnfs/scratch/temporary/DIMA/")
-library(Seurat,  lib.loc = "/usr/local/lib/R/site-library")
+library(Seurat)
 library(destiny)  
 library(SingleCellExperiment)
 library(ggplot2)
 library(Signac)
 library(SCENT)
 
-data = readRDS("scmultiome_mpi/scmultiome_230629.rds")
-data@assays$ATAC@links
-
-
-time=read.csv('/hpcnfs/scratch/DIMA/piva/mpi_freiburg/timepoint_from_ingestion.csv')
-data@meta.data['inferred_timepoints']=time$time
-data@meta.data['barcodes']=row.names(data@meta.data)
-
-
-# New fragments paths
-oldpath='/tungstenfs/scratch/shared/gchao_ggiorget/data_freiburg/multiome/'
-newpath='/hpcnfs/scratch/temporary/DIMA/atac_fragments_freiburg/'
-for (e in 1:12) {
-  data@assays$ATAC@fragments[[e]]@path=gsub(oldpath,newpath, data@assays$ATAC@fragments[[e]]@path )
-  print(e)
-  print(data@assays$ATAC@fragments[[e]])
-  print(data@assays$ATAC@fragments[[e]]@path )
-}
-
+setwd('/hpcnfs/scratch/DIMA/piva/mpi_freiburg/scmultiome/') # path to repository
+data = readRDS("./data/scmultiome_230629.rds")
 
 # =========== UMAP on ATAC =============
 
@@ -124,7 +106,7 @@ p1wt|p2wt
 
 
 
-## integration RNA + ATAC 
+## ==== integration RNA + ATAC ====
 # FindMultiModalNeighbors function constructs a weighted nearest neighbor (WNN) graph. 
 # For each cell, we identify the nearest neighbors based on a weighted combination of two modalities, 
 # one computed for each assay.

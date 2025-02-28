@@ -1,0 +1,401 @@
+---
+title: "Bulk RNAseq report"
+author: "Annamaria Piva"
+date: "2024-19-09"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: united
+    code_folding: hide
+  pdf_document:
+    toc: yes
+---
+
+# Overview
+
+- RNAseq samples have been analysed with STAR/salmon using [nf-core](https://nf-co.re/rnaseq) v3.14.0
+
+- Filtering steps: genes with reads in fewer than 2 samples are filtered out; genes with fewer reads across all samples less than nsamples/2 are filtered out.
+
+- Differential gene expression analysis has been performed using [DESeq2](http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html)
+
+- Differential gene expression filters: foldchange higher than log2(2.5) and padj < 0.05
+
+- Gene set enrichment analysis (GSEA) has been performed using [ClusterProfiler](https://bioconductor.org/packages/release/bioc/html/clusterProfiler.html)
+
+- GSEA filters: padj < 0.05
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, results='asis')
+```
+
+
+```{r library, include=FALSE}
+setwd("/hpcscratch/ieo/DIMA/scmultiome_mpi/bulk_rnaseq/")
+if (!require("DT")) install.packages('DT')
+
+library("DESeq2")
+library(rtracklayer)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(gplots) 
+library(ggplot2)
+library("DT")
+library(reshape)
+library(plotly)
+library(clusterProfiler)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+```
+
+
+```{r functions, include=FALSE}
+mydeseq2 = function(dds, min_reads, conditions, min_sample = 5, ...){
+  # recreate dds object
+  counts = assay(dds)
+  counts = counts[rowSums(counts) > min_reads & rowSums(counts > 1) > min_sample, ]
+  coldata<-as.data.frame(response[colData(dds)$sample])
+  colnames(coldata)="condition"
+  coldata$condition = as.factor(coldata$condition)
+  rownames(coldata)<-colnames(counts)
+  
+  
+  ##Performing deseq2
+  dds_current <-DESeqDataSetFromMatrix(
+    countData=counts,
+    colData=coldata,
+    design=~condition)
+  
+  diff<-DESeq(dds_current, ...)
+  res_all = NULL
+  df_all_genes = NULL
+  ##Extracting results
+  for(i in 1:length(conditions)){
+    for(j in 1:length(conditions)){
+      if(i!=j){
+        res<-results(diff, contrast = c("condition", conditions[i], conditions[j])) # cond1 vs cond2
+        # select = which((res)$padj < qvalue &
+        #            abs((res)$log2FoldChange) > logfc)
+        # res = res[select,]
+        res = data.frame(res)
+        res$comparison_n_vs_d = paste0(conditions[i], "_vs_", conditions[j])
+        res$gene = rownames(res)
+        res_all = rbind(res_all, res)
+        res = na.omit(res)
+        df_all_genes = rbind(df_all_genes, res)
+      }
+    }
+  }
+  # normalisation
+  rld <- rlog(dds_current, blind=FALSE)
+  return(list(res=res_all, df_all_genes=df_all_genes, rld=rld, coldata=coldata))
+}
+
+# plotheatmap = function(res, contrasts){
+#   
+#   genes = unique(res$gene[res$comparison_n_vs_d %in% contrasts])
+#   column_names = response[colnames(assay(rld))]
+#   ordering = order(column_names)
+#   rng <- quantile(assay(rld), c(.025, 0.975))
+#   column_ha = HeatmapAnnotation(condition = column_names[ordering])
+#   print(Heatmap(
+#     matrix = assay(rld)[, ordering],
+#     col = circlize::colorRamp2(seq(rng[1], rng[2], len =
+#                                      9), brewer.pal(9, "RdBu")),
+#     name = "Expression across patients",
+#     cluster_rows = TRUE,
+#     cluster_columns = FALSE,
+#     show_column_names = FALSE,
+#     show_row_names = FALSE,
+#     width = unit(4, "inches"),
+#     show_heatmap_legend = TRUE,
+#     use_raster = FALSE,
+#     raster_device = "png",
+#     raster_quality = 1, 
+#     top_annotation = column_ha,
+#     km = 3
+#   ))
+# }
+```
+
+```{r parameters, echo=TRUE}
+
+rdata_file="results/star_salmon/deseq2_qc/deseq2.dds.RData"
+qvalue=0.05
+logfc=log2(2.5)
+min_sample = 2 # minimum number of samples where the gene needs to have at least 1 read
+org = "org.Hs.eg.db"
+#system("rm -r gse_results/")
+system("mkdir gse_results")
+system("mkdir gse_results/hallmarks")
+```
+
+```{r load_data, include=FALSE}
+# load rdata from nfcore
+sample_info = read.table("sample_info.tsv", header=T)
+response = sample_info$condition
+names(response) = sample_info$sample
+load(rdata_file)
+```
+
+
+
+```{r mild_filtering_analysis, include=FALSE}
+mreads = round(ncol(dds) / 2) ## filter genes without at least mreads reads in all condition combined
+out = mydeseq2(dds, min_reads = mreads, min_sample = min_sample, 
+               conditions = unique(sample_info$condition)
+               )
+res = out[["res"]]
+rld = out[["rld"]]
+df_all_genes = out[["df_all_genes"]]
+coldata = out[["coldata"]]
+all = na.omit(res)
+
+```
+
+
+
+```{r select_samples, include=FALSE}
+
+unique(colData(rld)$condition)
+
+## only early timepoints
+select_01h=c('EzKD_0.1h', 'nejKD_0.1h', 'wt_0.1h')
+dds_subset <- rld[, rld$condition %in% select_01h]
+
+
+```
+
+
+# Samples
+```{r, samples_table}
+
+datatable(
+  sample_info,
+  extensions = 'Buttons',
+  options = list(
+    dom = 'Blfrtip',
+    #buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    lengthMenu = list(c(12, 25, 50, -1),
+                      c( "All", 3,6,9,12))
+  ),
+  rownames = TRUE
+)
+
+```
+
+
+
+# PCA 
+
+```{r fig.width=8, fig.height=7, message=FALSE, warning=FALSE}
+tmp = plotPCA(rld, intgroup = "condition", returnData=TRUE)
+plotly::plot_ly(data=tmp, x=~PC1, y=~PC2, text = ~name, color=~condition) 
+
+colors_tot=c(  'wt_0.1h'="#00BA38" , 'EzKD_0.1h'= "#619CFF", 'nejKD_0.1h'="#F8766D", 
+            'wt_st5'="#386641" , 'EzKD_st5'= "#0077b6", 'nejKD_st5'="#772e25"
+           )
+
+## save PCA plot
+p=ggplot(tmp, aes(x = PC1, y = PC2, color = condition)) +
+     geom_point(size = 3) + 
+     labs(title = "PCA - bulk RNA seq", x = "PC1", y = "PC2", color = "Condition") +
+     theme_minimal()
+p
+# Save the plot to a PDF file
+ggsave("/hpcnfs/scratch/DIMA/piva/mpi_freiburg/figures_rev/pca_bulk_rna.pdf", plot = p, device = "pdf", width = 8, height = 6)
+
+```
+
+```{r mf_pca_ma, message=FALSE, warning=FALSE}
+
+## PCA subset (early conditions)
+tmp = plotPCA(dds_subset, intgroup = "condition", returnData=TRUE)
+plotly::plot_ly(data=tmp, x=~PC1, y=~PC2, text = ~name, color=~condition) 
+
+```
+
+
+```{r mf_pca_ma, message=FALSE, warning=FALSE}
+
+colors=c(  'wt_0.1h'="#00BA38" , 'EzKD_0.1h'= "#619CFF", 'nejKD_0.1h'="#F8766D")
+
+
+p=plotPCA(dds_subset, intgroup = "condition", returnData=FALSE)+
+     geom_point(size = 4) +  scale_color_manual(values = colors) +
+     theme_minimal(base_size = 16)
+p
+
+## save PCA plot
+ggsave("/hpcnfs/scratch/DIMA/piva/mpi_freiburg/figures_rev/pca_bulk_rna_0.1h.pdf", plot = p, device = "pdf", width = 6, height = 5)
+
+```
+
+
+
+
+
+# Condition 1 vs Condition 2
+
+### Contrasts:
+
+```{r plot}
+
+sample_info$sample
+
+contrasts=c( "EzKD_0.1h_vs_wt_0.1h", "EzKD_st5_vs_wt_st5", 
+             "nejKD_0.1h_vs_wt_0.1h", "nejKD_st5_vs_wt_st5",
+             "wt_0.1h_vs_wt_st5"
+             )
+
+```
+
+
+### MA plot
+```{r MA plot,results='asis', message=FALSE, warning=FALSE}
+
+plot_list=list() 
+contrast =contrasts[1]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+plotly::plot_ly(data=res, x=~log2(baseMean), y=~log2FoldChange, color=~significant, 
+                                      text = ~gene) %>% layout(title = sprintf("MA plot - %s", contrast))
+#---
+contrast =contrasts[2]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+plotly::plot_ly(data=res, x=~log2(baseMean), y=~log2FoldChange, color=~significant, 
+                                      text = ~gene) %>% layout(title = sprintf("MA plot - %s", contrast))
+#---
+contrast =contrasts[3]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+plotly::plot_ly(data=res, x=~log2(baseMean), y=~log2FoldChange, color=~significant, 
+                                      text = ~gene) %>% layout(title = sprintf("MA plot - %s", contrast))
+#---
+contrast =contrasts[4]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+plotly::plot_ly(data=res, x=~log2(baseMean), y=~log2FoldChange, color=~significant, 
+                                      text = ~gene) %>% layout(title = sprintf("MA plot - %s", contrast))
+
+
+#---
+contrast =contrasts[5]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+plotly::plot_ly(data=res, x=~log2(baseMean), y=~log2FoldChange, color=~significant, 
+                                      text = ~gene) %>% layout(title = sprintf("MA plot - %s", contrast))
+#print(plot_list[[contrast]])
+#plot_list
+```
+### Volcano plot
+
+```{r volcano plot, results='asis',message=FALSE, warning=FALSE}
+
+contrast= contrasts[1]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+
+res$deg = ifelse(res$log2FoldChange>0, 'up-reg', 'down-reg')
+#print(table(res[res$significant=="significant","deg"]))
+
+plotly::plot_ly(data=res, x=~log2FoldChange, y=~-log10(padj),
+                                      color=~significant, text = ~gene) %>% layout(title = sprintf("Volcano plot - %s", contrast)) %>% add_annotations(
+                                          x = -20, y = 50, text = paste0("n. down-reg:\n", table(res[res$significant=="significant","deg"])['down-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "blue"),xanchor = 'left', yanchor = 'middle') %>% add_annotations(
+                                          x = 20, y = 50, text = paste0("n. up-reg:\n", table(res[res$significant=="significant","deg"])['up-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "red2"),xanchor = 'left', yanchor = 'middle')
+
+
+#----
+contrast= contrasts[2]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+
+res$deg = ifelse(res$log2FoldChange>0, 'up-reg', 'down-reg')
+#print(table(res[res$significant=="significant","deg"]))
+
+plotly::plot_ly(data=res, x=~log2FoldChange, y=~-log10(padj),
+                                      color=~significant, text = ~gene) %>% layout(title = sprintf("Volcano plot - %s", contrast)) %>% add_annotations(
+                                          x = -20, y = 50, text = paste0("n. down-reg:\n", table(res[res$significant=="significant","deg"])['down-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "blue"),xanchor = 'left', yanchor = 'middle') %>% add_annotations(
+                                          x = 20, y = 50, text = paste0("n. up-reg:\n", table(res[res$significant=="significant","deg"])['up-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "red2"),xanchor = 'left', yanchor = 'middle')
+#print(plot_list[[contrast]])
+
+#----
+contrast= contrasts[3]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+
+res$deg = ifelse(res$log2FoldChange>0, 'up-reg', 'down-reg')
+#print(table(res[res$significant=="significant","deg"]))
+
+plotly::plot_ly(data=res, x=~log2FoldChange, y=~-log10(padj),
+                                      color=~significant, text = ~gene) %>% layout(title = sprintf("Volcano plot - %s", contrast)) %>% add_annotations(
+                                          x = -20, y = 50, text = paste0("n. down-reg:\n", table(res[res$significant=="significant","deg"])['down-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "blue"),xanchor = 'left', yanchor = 'middle') %>% add_annotations(
+                                          x = 20, y = 50, text = paste0("n. up-reg:\n", table(res[res$significant=="significant","deg"])['up-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "red2"),xanchor = 'left', yanchor = 'middle')
+#print(plot_list[[contrast]])
+
+#----
+contrast= contrasts[4]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+
+res$deg = ifelse(res$log2FoldChange>0, 'up-reg', 'down-reg')
+#print(table(res[res$significant=="significant","deg"]))
+
+plotly::plot_ly(data=res, x=~log2FoldChange, y=~-log10(padj),
+                                      color=~significant, text = ~gene) %>% layout(title = sprintf("Volcano plot - %s", contrast)) %>% add_annotations(
+                                          x = -20, y = 50, text = paste0("n. down-reg:\n", table(res[res$significant=="significant","deg"])['down-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "blue"),xanchor = 'left', yanchor = 'middle') %>% add_annotations(
+                                          x = 20, y = 50, text = paste0("n. up-reg:\n", table(res[res$significant=="significant","deg"])['up-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "red2"),xanchor = 'left', yanchor = 'middle')
+
+#----
+
+contrast= contrasts[5]
+res = all[all$comparison_n_vs_d == contrast, ]
+select = which((res)$padj < qvalue &
+                 abs((res)$log2FoldChange) > logfc)
+res$significant = "nosignificant"
+res$significant[select] = "significant"
+
+res$deg = ifelse(res$log2FoldChange>0, 'up-reg', 'down-reg')
+#print(table(res[res$significant=="significant","deg"]))
+
+plotly::plot_ly(data=res, x=~log2FoldChange, y=~-log10(padj),
+                                      color=~significant, text = ~gene) %>% layout(title = sprintf("Volcano plot - %s", contrast)) %>% add_annotations(
+                                          x = -20, y = 50, text = paste0("n. down-reg:\n", table(res[res$significant=="significant","deg"])['down-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "blue"),xanchor = 'left', yanchor = 'middle') %>% add_annotations(
+                                          x = 20, y = 50, text = paste0("n. up-reg:\n", table(res[res$significant=="significant","deg"])['up-reg'] ), showarrow = FALSE,font = list(family = "Arial", size = 16, color = "red2"),xanchor = 'left', yanchor = 'middle')
+
+#----
+
+
+
+```

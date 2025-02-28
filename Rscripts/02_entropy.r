@@ -1,18 +1,18 @@
-setwd("/hpcnfs/scratch/temporary/DIMA/")
 library(Seurat)
 library(destiny)  
 library(SingleCellExperiment)
 library(ggplot2)
 library(Signac)
 
-data = readRDS("mergelink_clustered_5.rds")
+setwd('/hpcnfs/scratch/DIMA/piva/mpi_freiburg/scmultiome/') # path to repository
+data = readRDS("./data/scmultiome_230629.rds")
 
 ## ==== SCENT: entropy ====
 library(AnnotationDbi)
 library(org.Hs.eg.db)
 library(SCENT)
 
-m=read.csv('/hpcnfs/scratch/DIMA/piva/mpi_freiburg/hd_fly_ortholog.csv')
+m=read.csv('./data/hd_fly_ortholog.csv')
 gs=m$Human_gene
 gs2entrez=AnnotationDbi::select(org.Hs.eg.db, keys=gs, columns='ENTREZID', keytype='SYMBOL')
 head(gs2entrez)
@@ -65,4 +65,4 @@ VlnPlot(data, features = 'entropy_ccat',sort='increasing',  pt.size =0.1)
 VlnPlot(data, features = 'entropy_ccat', group.by='sample',sort='increasing',  pt.size =0.1)
 VlnPlot(data, features = 'entropy_ccat', split.by='sample', sort='increasing',  pt.size =0.1)
 
-write.csv(data@meta.data, '/hpcnfs/scratch/DIMA/piva/mpi_freiburg/adata/obs_entropy_ccat1.csv')
+write.csv(data@meta.data, './results/obs_entropy_ccat1.csv')

@@ -1,21 +1,16 @@
-setwd("/hpcscratch/ieo/DIMA/scmultiome_mpi/08_other/wt_complete/")
-
-library(Seurat,  lib.loc = "/usr/local/lib/R/site-library")
+library(Seurat)
 library(Signac)
 require(rtracklayer)
 library(GenomicRanges)
 library(BSgenome.Dmelanogaster.UCSC.dm6)
 library(dplyr)
 
-# Peak linking
+# ==== Peak linking ====
 # Import called peaks
 
-data = readRDS("/hpcnfs/scratch/temporary/DIMA/scmultiome_mpi/scmultiome_230629.rds")
-oldpath='/tungstenfs/scratch/shared/gchao_ggiorget/data_freiburg/multiome/'
-newpath='/hpcnfs/scratch/temporary/DIMA/atac_fragments_freiburg/'
-for (e in 1:12) {
-  data@assays$ATAC@fragments[[e]]@path=gsub(oldpath,newpath, data@assays$ATAC@fragments[[e]]@path )
-}
+setwd('/hpcnfs/scratch/DIMA/piva/mpi_freiburg/scmultiome/') # path to repository
+data = readRDS("./data/scmultiome_230629.rds")
+
 
 sample_name='wt'
   
@@ -52,11 +47,8 @@ srat.sub %>%
   LinkPeaks(peak.assay = "peaks",
             expression.assay = "RNA",
             gene.id = TRUE) %>%
-  saveRDS(sprintf("/hpcscratch/ieo/DIMA/scmultiome_mpi/08_other/wt_complete/linked_%s.rds", basename))
+  saveRDS(sprintf("./results/linked_%s.rds", basename))
 
-## /hpcscratch/ieo/DIMA/scmultiome_mpi/08_other/wt_complete/linked_wt_only.rds 
-
-srat.sub
 
 
 
